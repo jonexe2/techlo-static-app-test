@@ -1,0 +1,20 @@
+name: Deploy to Static.app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy Astro site to Static.app
+        uses: designmodo/static-app-deploy-action@v1.0.0
+        with:
+          api-key: ${{ secrets.STATIC_APP_API_KEY }}
+          build-dir: 'dist'
+          build-command: 'npm run build'
+          install-command: 'npm ci'
+          node-version: '22'
