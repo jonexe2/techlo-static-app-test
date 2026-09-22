@@ -1,7 +1,6 @@
 ---
 import type { z } from "astro/zod";
 import Button from "@/components/Button.astro";
-import config from ".astro/config.generated.json";
 import type { contactFormSchema, inputFieldSchema } from "@/sections.schema";
 import { useTranslations } from "@/lib/utils/i18nUtils.ts";
 import { markdownify, toLowerCase } from "@/lib/utils/textConverter";
@@ -24,10 +23,6 @@ interface Props {
   hideLabels?: boolean;
   nativeSelect?: boolean;
 }
-
-const {
-  settings: { contactFormAction, contactFormProvider },
-} = config;
 
 const genIdFromLabel = (label: string) =>
   toLowerCase(label).replace(/\s+/g, "-");
@@ -169,34 +164,17 @@ const defaultErrorMessage = messageContent.error || formI18n.submissionFallback;
 
 <form
   id="contact-form"
+  static-form
+  static-form-id="hvac-leads"
+  static-form-success-callback="contactFormSuccess"
   {...{
-    "data-action": contactFormAction,
-    "data-provider": contactFormProvider,
     "data-message-submitting": formI18n.submitting,
-    "data-message-submission-fallback": formI18n.submissionFallback,
-    "data-message-unknown-provider": formI18n.unknownProvider,
-    "data-netlify": contactFormProvider === "netlify" ? "true" : undefined,
-    action: contactFormProvider === "netlify" ? contactFormAction : undefined,
   }}
   method="post"
   class:list={["contact-form", Astro.props.class]}>
   {
     form.emailSubject && (
-      <input
-        type="hidden"
-        name={
-          ["formsubmit.co", "formspree"].includes(contactFormProvider)
-            ? "_subject"
-            : "subject"
-        }
-        value={form.emailSubject}
-      />
-    )
-  }
-
-  {
-    contactFormProvider === "formsubmit.co" && (
-      <input type="hidden" name="_template" value="table" />
+      <input type="hidden" name="subject" value={form.emailSubject} />
     )
   }
 
@@ -231,13 +209,12 @@ const defaultErrorMessage = messageContent.error || formI18n.submissionFallback;
           <div class="contact-form-control-shell contact-form-select-shell">
             <select
               id={getFieldId(input)}
+              name={getFieldName(input)}
               {...(nativeSelect
                 ? {
-                    name: getFieldName(input),
                     required: input.required ? true : undefined,
                   }
                 : {
-                    "data-name": getFieldName(input),
                     "data-hs-select": getSelectConfig(input),
                     required: input.required ? true : undefined,
                   })}
@@ -455,10 +432,7 @@ const defaultErrorMessage = messageContent.error || formI18n.submissionFallback;
 
 <script>
   import {
-    formspreeSubmit,
-    netlifySubmit,
-    formSubmit,
-    isFormFilled,
+    formReset,
     setMessage,
     validateSelectTag,
   } from "@/lib/utils/FormHandle";
@@ -472,7 +446,16 @@ const defaultErrorMessage = messageContent.error || formI18n.submissionFallback;
 
     form.dataset.contactFormReady = "true";
 
-    let selectTags = form.querySelectorAll(
+    const callbackWindow = window as Window & {
+      contactFormSuccess?: () => void;
+    };
+
+    callbackWindow.contactFormSuccess = () => {
+      setMessage("default", true, false, form);
+      formReset(form);
+    };
+
+    const selectTags = form.querySelectorAll(
       "[input-wrapper]:not(.hidden) select[data-hs-select]",
     ) as NodeListOf<HTMLSelectElement>;
 
@@ -538,12 +521,6 @@ const defaultErrorMessage = messageContent.error || formI18n.submissionFallback;
 
     const syncSelectState = (items: HTMLSelectElement[]) => {
       items.forEach((item) => {
-        const name = item.getAttribute("data-name");
-
-        if (name) {
-          item.setAttribute("name", name);
-        }
-
         item.classList.toggle("hs-select-active", item.value !== "");
         validateSelectTag(item);
       });
@@ -598,66 +575,6 @@ const defaultErrorMessage = messageContent.error || formI18n.submissionFallback;
       },
       true,
     );
-
-    form.addEventListener("submit", async (e: Event) => {
-      e.preventDefault();
-
-      const provider = form.getAttribute("data-provider") || "";
-      const action = form.getAttribute("data-action") || "";
-      const submittingMessage = form.dataset.messageSubmitting || "";
-      const submissionFallbackMessage =
-        form.dataset.messageSubmissionFallback || "";
-      const unknownProviderMessage = form.dataset.messageUnknownProvider || "";
-
-      form
-        .querySelectorAll<HTMLElement>("[input-wrapper]")
-        .forEach((field) => field.classList.remove("is-error"));
-
-      selectTags = form.querySelectorAll(
-        "[input-wrapper]:not(.hidden) select[data-hs-select]",
-      ) as NodeListOf<HTMLSelectElement>;
-
-      syncSelectState(Array.from(selectTags));
-
-      if (!form.checkValidity()) {
-        form.reportValidity();
-        return;
-      }
-
-      if (isFormFilled(form)) {
-        setMessage(submittingMessage, "pending", true, form);
-
-        try {
-          switch (provider) {
-            case "netlify":
-              await netlifySubmit(form, action);
-              break;
-            case "formsubmit.co":
-              await formSubmit({
-                form,
-                action,
-              });
-              break;
-            case "formspree":
-              await formspreeSubmit(
-                Object.fromEntries(new FormData(form).entries()),
-                5000,
-                form,
-              );
-              break;
-            default:
-              throw new Error(unknownProviderMessage);
-          }
-        } catch (error) {
-          setMessage(
-            error + "! " + submissionFallbackMessage,
-            false,
-            false,
-            form,
-          );
-        }
-      }
-    });
   };
 
   initContactForm();
