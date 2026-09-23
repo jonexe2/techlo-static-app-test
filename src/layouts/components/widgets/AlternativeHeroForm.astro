@@ -461,10 +461,24 @@ const fieldIds = {
     window.addEventListener("message", (event) => {
       if (
         !awaitingResponse ||
-        event.source !== responseFrame.contentWindow ||
         typeof event.data !== "object" ||
         event.data === null ||
         event.data.type !== "hvac-lead-result"
+      ) {
+        return;
+      }
+
+      let originUrl: URL;
+
+      try {
+        originUrl = new URL(event.origin);
+      } catch {
+        return;
+      }
+
+      if (
+        originUrl.hostname !== "script.google.com" &&
+        !originUrl.hostname.endsWith(".googleusercontent.com")
       ) {
         return;
       }
