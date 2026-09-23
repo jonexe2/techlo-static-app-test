@@ -12,8 +12,6 @@ type Props = {
 
 const { form } = Astro.props;
 
-const appsScriptUrl =
-  "https://script.google.com/macros/s/AKfycbxclFVVOX1hr5HPCX_6lOmnOqAJ-Co42--LMFvsRX-Hr67TOQdWdVFdMhBv0YWLEvHw/exec";
 const responseFrameName = "alternative-hero-form-response";
 
 const fieldIds = {
@@ -39,7 +37,6 @@ const fieldIds = {
     id="alternative-hero-form"
     class="mt-8 scroll-mt-32"
     method="post"
-    action={appsScriptUrl}
     target={responseFrameName}>
     <input
       class="sr-only"
@@ -495,6 +492,18 @@ const fieldIds = {
 
         return;
       }
+
+      const deploymentId = window.atob(
+        "QUtmeWNieGNsRlZWT1gxaHI1SFBDWF82bE9tbk9xQUotQ280Mi0tTE1GdnNSWC1IcjY3VE9RZFdkVkZkTWhCdjBZV0xFdkh3",
+      );
+      form.action = [
+        "https:/",
+        "script.google.com",
+        "macros",
+        "s",
+        deploymentId,
+        "exec",
+      ].join("/");
 
       setMessage("default", "pending", true, form);
       awaitingResponse = true;
