@@ -1,6 +1,5 @@
 ---
 import type { z } from "astro/zod";
-import config from ".astro/config.generated.json";
 import Button from "@/components/Button.astro";
 import DynamicIcon from "@/helpers/DynamicIcon.astro";
 import type { alternativeHeroFormSchema } from "@/sections.schema";
@@ -12,9 +11,10 @@ type Props = {
 };
 
 const { form } = Astro.props;
-const {
-  settings: { contactFormAction, contactFormProvider },
-} = config;
+
+const appsScriptUrl =
+  "https://script.google.com/macros/s/AKfycbxclFVVOX1hr5HPCX_6lOmnOqAJ-Co42--LMFvsRX-Hr67TOQdWdVFdMhBv0YWLEvHw/exec";
+const responseFrameName = "alternative-hero-form-response";
 
 const fieldIds = {
   fullName: "alternative-hero-full-name",
@@ -30,7 +30,8 @@ const fieldIds = {
     <h3 class="text-dark text-h4-sm md:text-h4">{form.title}</h3>
     <span
       class="bg-primary mx-auto mt-4 block h-1 w-12 rounded-full"
-      aria-hidden="true"></span>
+      aria-hidden="true">
+    </span>
     <p class="text-text-light mt-4 text-sm">{form.description}</p>
   </div>
 
@@ -38,33 +39,16 @@ const fieldIds = {
     id="alternative-hero-form"
     class="mt-8 scroll-mt-32"
     method="post"
-    {...{
-      "data-action": contactFormAction,
-      "data-provider": contactFormProvider,
-      "data-message-error": form.messages.error,
-      "data-message-unknown-provider": form.messages.unknownProvider,
-      "data-netlify": contactFormProvider === "netlify" ? "true" : undefined,
-      action: contactFormProvider === "netlify" ? contactFormAction : undefined,
-    }}>
-    {
-      form.emailSubject && (
-        <input
-          type="hidden"
-          name={
-            ["formsubmit.co", "formspree"].includes(contactFormProvider)
-              ? "_subject"
-              : "subject"
-          }
-          value={form.emailSubject}
-        />
-      )
-    }
-
-    {
-      contactFormProvider === "formsubmit.co" && (
-        <input type="hidden" name="_template" value="table" />
-      )
-    }
+    action={appsScriptUrl}
+    target={responseFrameName}>
+    <input
+      class="sr-only"
+      type="text"
+      name="website"
+      tabindex="-1"
+      autocomplete="off"
+      aria-hidden="true"
+    />
 
     <p
       id="alternative-hero-validation-error"
@@ -243,16 +227,19 @@ const fieldIds = {
       </p>
     </div>
   </form>
+
+  <iframe
+    id="alternative-hero-form-response"
+    class="sr-only"
+    name={responseFrameName}
+    title="Form submission response"
+    tabindex="-1"
+    aria-hidden="true">
+  </iframe>
 </div>
 
 <script>
-  import {
-    formspreeSubmit,
-    netlifySubmit,
-    formSubmit,
-    isFormFilled,
-    setMessage,
-  } from "@/lib/utils/FormHandle";
+  import { isFormFilled, setMessage } from "@/lib/utils/FormHandle";
 
   const initAlternativeHeroForm = () => {
     const form = document.getElementById(
@@ -284,6 +271,9 @@ const fieldIds = {
     const validationError = form.querySelector<HTMLElement>(
       "#alternative-hero-validation-error",
     );
+    const responseFrame = document.getElementById(
+      "alternative-hero-form-response",
+    ) as HTMLIFrameElement | null;
     const checkboxes = Array.from(
       form.querySelectorAll<HTMLInputElement>("[data-service-option]"),
     );
@@ -295,7 +285,8 @@ const fieldIds = {
       !panel ||
       !hiddenServices ||
       !serviceError ||
-      !validationError
+      !validationError ||
+      !responseFrame
     ) {
       return;
     }
@@ -456,9 +447,35 @@ const fieldIds = {
       }, 0);
     });
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
+    let responseTimeout: number | undefined;
+    let awaitingResponse = false;
 
+    const finishSubmission = (success: boolean) => {
+      window.clearTimeout(responseTimeout);
+      responseTimeout = undefined;
+      awaitingResponse = false;
+      setMessage("default", success, false, form);
+
+      if (success) {
+        form.reset();
+      }
+    };
+
+    window.addEventListener("message", (event) => {
+      if (
+        !awaitingResponse ||
+        event.source !== responseFrame.contentWindow ||
+        typeof event.data !== "object" ||
+        event.data === null ||
+        event.data.type !== "hvac-lead-result"
+      ) {
+        return;
+      }
+
+      finishSubmission(event.data.success === true);
+    });
+
+    form.addEventListener("submit", (event) => {
       syncServices();
       validationError.classList.add("hidden");
       const servicesMissing = hiddenServices.value === "";
@@ -467,6 +484,7 @@ const fieldIds = {
       setServicesError(servicesMissing);
 
       if (!fieldsValid || servicesMissing || !isFormFilled(form)) {
+        event.preventDefault();
         showValidationError(servicesMissing && fieldsValid);
 
         if (!fieldsValid) {
@@ -478,40 +496,12 @@ const fieldIds = {
         return;
       }
 
-      const provider = form.dataset.provider || "";
-      const action = form.dataset.action || "";
-      const fallbackMessage = form.dataset.messageError || "";
-      const unknownProviderMessage =
-        form.dataset.messageUnknownProvider || fallbackMessage;
-
       setMessage("default", "pending", true, form);
-
-      try {
-        switch (provider) {
-          case "netlify":
-            await netlifySubmit(form, action);
-            break;
-          case "formsubmit.co":
-            await formSubmit({ form, action });
-            break;
-          case "formspree":
-            await formspreeSubmit(
-              Object.fromEntries(new FormData(form).entries()),
-              5000,
-              form,
-            );
-            break;
-          default:
-            throw new Error(unknownProviderMessage);
-        }
-      } catch (error) {
-        setMessage(
-          error instanceof Error ? error.message : fallbackMessage,
-          false,
-          false,
-          form,
-        );
-      }
+      awaitingResponse = true;
+      window.clearTimeout(responseTimeout);
+      responseTimeout = window.setTimeout(() => {
+        if (awaitingResponse) finishSubmission(false);
+      }, 30_000);
     });
 
     syncServices();
