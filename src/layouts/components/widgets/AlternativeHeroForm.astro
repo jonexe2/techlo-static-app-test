@@ -46,6 +46,7 @@ const fieldIds = {
       autocomplete="off"
       aria-hidden="true"
     />
+    <input type="hidden" name="requestId" value="" />
 
     <p
       id="alternative-hero-validation-error"
@@ -262,6 +263,9 @@ const fieldIds = {
     const hiddenServices = form.querySelector<HTMLInputElement>(
       "#alternative-hero-services",
     );
+    const requestIdInput = form.querySelector<HTMLInputElement>(
+      'input[name="requestId"]',
+    );
     const serviceError = form.querySelector<HTMLElement>(
       "#alternative-hero-services-error",
     );
@@ -281,6 +285,7 @@ const fieldIds = {
       !triggerText ||
       !panel ||
       !hiddenServices ||
+      !requestIdInput ||
       !serviceError ||
       !validationError ||
       !responseFrame
@@ -444,13 +449,70 @@ const fieldIds = {
       }, 0);
     });
 
-    let responseTimeout: number | undefined;
-    let awaitingResponse = false;
+    const getAppsScriptEndpoint = () => {
+      const deploymentId = window.atob(
+        "QUtmeWNieGNsRlZWT1gxaHI1SFBDWF82bE9tbk9xQUotQ280Mi0tTE1GdnNSWC1IcjY3VE9RZFdkVkZkTWhCdjBZV0xFdkh3",
+      );
 
-    const finishSubmission = (success: boolean) => {
+      return [
+        "https:/",
+        "script.google.com",
+        "macros",
+        "s",
+        deploymentId,
+        "exec",
+      ].join("/");
+    };
+
+    const generateRequestId = () => {
+      if (typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
+      }
+
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = Array.from(bytes, (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      );
+
+      return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+    };
+
+    let activeRequestId: string | undefined;
+    let responseTimeout: number | undefined;
+    let pollTimeout: number | undefined;
+    let activeScript: HTMLScriptElement | undefined;
+    let activeCallbackName: string | undefined;
+    let callbackSequence = 0;
+
+    const cleanupJsonp = (
+      script = activeScript,
+      callbackName = activeCallbackName,
+    ) => {
+      script?.remove();
+      if (activeScript === script) activeScript = undefined;
+
+      if (callbackName) {
+        delete (window as unknown as Record<string, unknown>)[callbackName];
+        if (activeCallbackName === callbackName) activeCallbackName = undefined;
+      }
+    };
+
+    const stopPolling = () => {
+      window.clearTimeout(pollTimeout);
+      pollTimeout = undefined;
+      cleanupJsonp();
+    };
+
+    const finishSubmission = (requestId: string, success: boolean) => {
+      if (activeRequestId !== requestId) return;
+
       window.clearTimeout(responseTimeout);
       responseTimeout = undefined;
-      awaitingResponse = false;
+      stopPolling();
+      activeRequestId = undefined;
       setMessage("default", success, false, form);
 
       if (success) {
@@ -458,33 +520,64 @@ const fieldIds = {
       }
     };
 
-    window.addEventListener("message", (event) => {
-      if (
-        !awaitingResponse ||
-        typeof event.data !== "object" ||
-        event.data === null ||
-        event.data.type !== "hvac-lead-result"
-      ) {
-        return;
-      }
+    const pollStatus = (requestId: string) => {
+      if (activeRequestId !== requestId || activeScript) return;
 
-      let originUrl: URL;
+      callbackSequence += 1;
+      const callbackName = `alternativeHeroStatus_${Date.now()}_${callbackSequence}`;
+      const script = document.createElement("script");
+      const statusUrl = new URL(getAppsScriptEndpoint());
+      statusUrl.searchParams.set("requestId", requestId);
+      statusUrl.searchParams.set("callback", callbackName);
+      statusUrl.searchParams.set("_", `${Date.now()}`);
+      activeScript = script;
+      activeCallbackName = callbackName;
 
-      try {
-        originUrl = new URL(event.origin);
-      } catch {
-        return;
-      }
+      const scheduleNextPoll = () => {
+        if (activeRequestId === requestId) {
+          pollTimeout = window.setTimeout(() => pollStatus(requestId), 1_000);
+        }
+      };
 
-      if (
-        originUrl.hostname !== "script.google.com" &&
-        !originUrl.hostname.endsWith(".googleusercontent.com")
-      ) {
-        return;
-      }
+      (window as unknown as Record<string, unknown>)[callbackName] = (
+        result: unknown,
+      ) => {
+        cleanupJsonp(script, callbackName);
 
-      finishSubmission(event.data.success === true);
-    });
+        if (
+          activeRequestId !== requestId ||
+          typeof result !== "object" ||
+          result === null
+        ) {
+          scheduleNextPoll();
+          return;
+        }
+
+        const status = result as Record<string, unknown>;
+        if (
+          status.type !== "hvac-lead-status" ||
+          status.requestId !== requestId
+        ) {
+          scheduleNextPoll();
+          return;
+        }
+
+        if (status.completed === false) {
+          scheduleNextPoll();
+        } else if (status.completed === true) {
+          finishSubmission(requestId, status.success === true);
+        } else {
+          scheduleNextPoll();
+        }
+      };
+
+      script.addEventListener("error", () => {
+        cleanupJsonp(script, callbackName);
+        scheduleNextPoll();
+      });
+      script.src = statusUrl.toString();
+      document.head.append(script);
+    };
 
     form.addEventListener("submit", (event) => {
       syncServices();
@@ -507,24 +600,18 @@ const fieldIds = {
         return;
       }
 
-      const deploymentId = window.atob(
-        "QUtmeWNieGNsRlZWT1gxaHI1SFBDWF82bE9tbk9xQUotQ280Mi0tTE1GdnNSWC1IcjY3VE9RZFdkVkZkTWhCdjBZV0xFdkh3",
-      );
-      form.action = [
-        "https:/",
-        "script.google.com",
-        "macros",
-        "s",
-        deploymentId,
-        "exec",
-      ].join("/");
+      const requestId = generateRequestId();
+      requestIdInput.value = requestId;
+      form.action = getAppsScriptEndpoint();
 
       setMessage("default", "pending", true, form);
-      awaitingResponse = true;
+      stopPolling();
       window.clearTimeout(responseTimeout);
+      activeRequestId = requestId;
       responseTimeout = window.setTimeout(() => {
-        if (awaitingResponse) finishSubmission(false);
+        finishSubmission(requestId, false);
       }, 30_000);
+      pollTimeout = window.setTimeout(() => pollStatus(requestId), 0);
     });
 
     syncServices();
